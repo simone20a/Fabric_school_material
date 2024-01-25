@@ -45,7 +45,7 @@ async function newGrpcConnection(organization) {
     const tlsCredentials = grpc.credentials.createSsl(tlsRootCert);
 
     //Complete the gRCP Client connection here 
-    return new grpc.Client(...
+    return new grpc.Client(peerEndpoints[organization], tlsCredentials,
         { 'grpc.ssl_target_name_override': peerHostAlias }
     );
 }
@@ -60,8 +60,8 @@ function newIdentity(organization) {
     const certPath = path.join(cryptoPath, `${organization}/users/User1@${organization}/msp/signcerts/User1@${organization}-cert.pem`)
     const mspId = orgMspIds[organization];
     //Retrieve and return credentials here ...
-    // const credentials ... 
-    // return {...}
+    const credentials = fs.readFileSync(certPath);
+    return {mspId, credentials};
 }
 
 /**
@@ -78,7 +78,7 @@ function newSigner(organization) {
     const privateKeyPem = fs.readFileSync(keyPath)
     const privateKey = crypto.createPrivateKey(privateKeyPem)
     //Create and return the signing implementation here
-    // ...
+    return signers.newPrivateKeySigner(privateKey);
 }
 
 /**
@@ -90,27 +90,26 @@ function newSigner(organization) {
   * @param {Array} transactionParams | transaction parameters
   * @returns a new signing implementation for the user
  */
-async function submitT(organization, channel, chaincode, transactionName, transactionParams) {
+async function submitT(organization) {
 
     organization = organization.toLowerCase()
 
     console.log("\nCreating gRPC connection...")
     //Establish gRPC connection here
-    // const client = ...
+    const client = await newGrpcConnection(organization);
 
     console.log(`Retrieving identity for User1 of ${organization} ...`)
     //Retrieve User1's identity here
-    // const id = ...
+    const id = newIdentity(organization);
 
     //Retrieve signing implementation here
-    //  const signer = ...
+    const signer = newSigner(organization);
 
     //Complete the gateway connection here ...
     const gateway = connect({
-        //...,
-        //...,
-        //...,
-
+        client,
+        identity: id,
+        signer: signer,
         // Default timeouts for different gRPC calls
         evaluateOptions: () => {
             return { deadline: Date.now() + 5000 }; // 5 seconds
@@ -127,35 +126,39 @@ async function submitT(organization, channel, chaincode, transactionName, transa
     })
 
     try {
-        console.log(`Connecting to ${channel} ...`)
+        console.log(`Connecting to channels ...`)
         //Retrieve the channel here
-        //const network = ...
+        const q1network = gateway.getNetwork("q1channel");
+        const q2network = gateway.getNetwork("q2channel");
 
-        console.log(`Getting the ${chaincode} contract ...`)
         //Retrieve the contract here
-        //const contract = ...
+        const orderContract = q1network.getContract("orderCC");
+        const supplyContract = q2network.getContract("supplyCC");
 
-        console.log(`Submitting ${transactionName} transaction ...\n`)
+
 
         //Submit transaction here
-        let resp = null
-        if (!transactionParams || transactionParams === '') {
-            //resp = ...
-        } else {
-            //resp = ...
-        }
-        const resultJson = utf8Decoder.decode(resp);
+        // let resp = null;
 
-        if (resultJson && resultJson !== null) {
-            const result = JSON.parse(resultJson);
-            console.log('*** Result:', result);
-        }
-        console.log('*** Transaction committed successfully');
+        // if (!transactionParams || transactionParams === '') {
+        //     resp = await contract.submitTransaction(transactionName);
+        // } else {
+        //     resp = await contract.submitTransaction(transactionName, ...transactionParams);
+        // }
+        // const resultJson = utf8Decoder.decode(resp);
 
+        // if (resultJson && resultJson !== null) {
+        //     const result = JSON.parse(resultJson);
+        //     console.log('*** Result:', result);
+        // }
+        // console.log('*** Transaction committed successfully');
 
-        //Retrieve chaincode events here ...
-        //const events = ...
+        const events = await q1network.getChaincodeEvents("orderCC", {startBlock: BigInt(0)});
+        console.log('*** application running');
         try {
+            var max = 0;
+            var maxID;
+            var maxQuantity;
             for await (const event of events) {
                 const asset = new TextDecoder().decode(event.payload);
 
@@ -164,9 +167,31 @@ async function submitT(organization, channel, chaincode, transactionName, transa
                 console.log(`-- chaincodeName: ${event.chaincodeName}`)
                 console.log(`-- transactionId: ${event.transactionId}`)
                 console.log(`-- blockNumber: ${event.blockNumber}\n`)
+                if (event.blockNumber >= max) {
+                    max = event.blockNumber;
+                    maxID = JSON.parse(asset).orderId;
+                    maxQuantity = JSON.parse(asset).quality;
+                }
+                console.log('*** max event ', max, " ", maxID, " ", maxQuantity);
+                let supplyResp = await supplyContract.submitTransaction("getAllSupply");
+                const resultJson = utf8Decoder.decode(supplyResp);
+                if (resultJson && resultJson !== null) {
+                    const supplyResult = JSON.parse(resultJson);
+                    console.log('*** Result Supply:', supplyResult);
+                }
+                let orderResp = utf8Decoder.decode(await orderContract.submitTransaction("queryOrder", JSON.parse(asset).orderId));
+                console.log('*** Result Order:', orderResp);
             }
+
+            
+
+            
+
+            console.log('*** finished');
+
+
         } finally {
-            events.close();
+            events.close;
         }
     } catch (err) {
         console.error(err)
@@ -177,21 +202,8 @@ async function submitT(organization, channel, chaincode, transactionName, transa
 
 }
 
-function submit(organization, channel, chaincode, transactionName, transactionParams) {
-    if (!organization) {
-        console.log("organization argument missing!")
-    }
-    else if (!channel) {
-        console.log("channel argument missing!")
-    }
-    else if (!chaincode) {
-        console.log("chaincode argument missing!")
-    }
-    else if (!transactionName) {
-        console.log("transactionName argument missing!")
-    } else {
-        submitT(organization, channel, chaincode, transactionName, transactionParams)
-    }
+function submit(organization) {
+    submitT("agency.quotation.com");
 }
 
 module.exports = { submitT, submit }
